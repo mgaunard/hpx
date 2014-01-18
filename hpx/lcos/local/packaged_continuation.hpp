@@ -103,7 +103,8 @@ namespace hpx { namespace lcos { namespace detail
 
         void run_impl(typename shared_state_ptr_for<Future>::type const& f)
         {
-            Future future = detail::future_access::create<Future>(f);
+            // if we get here, this future is ready
+            Future future = detail::future_access::create<Future>(f, true);
             invoke_continuation(f_, future, *this);
         }
 
@@ -136,8 +137,9 @@ namespace hpx { namespace lcos { namespace detail
         async_impl(typename shared_state_ptr_for<Future>::type const& f)
         {
             reset_id r(*this);
-
-            Future future = detail::future_access::create<Future>(f);
+            
+            // if we get here, this future is ready
+            Future future = detail::future_access::create<Future>(f, true);
             invoke_continuation(f_, future, *this);
             return threads::terminated;
         }
@@ -472,7 +474,8 @@ namespace hpx { namespace lcos { namespace detail
             typename shared_state_ptr_for<Inner>::type const& inner_state)
         {
             try {
-                Inner inner = future_access::create<Inner>(inner_state);
+                // if we get here, this future is ready
+                Inner inner = future_access::create<Inner>(inner_state, true);
 
                 transfer_result(inner, *this);
             }
@@ -499,7 +502,7 @@ namespace hpx { namespace lcos { namespace detail
 
             try {
                 // if we get here, this future is ready
-                Outer outer = future_access::create<Outer>(outer_state);
+                Outer outer = future_access::create<Outer>(outer_state, true);
 
                 // take by value, as the future will go away immediately
                 inner_shared_state_ptr inner_state =

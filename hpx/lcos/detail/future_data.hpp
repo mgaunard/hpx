@@ -156,27 +156,10 @@ namespace detail
                 "this future does not support cancellation");
         }
 
-        /// Get the result of the requested action. This call blocks (yields
-        /// control) if the result is not ready. As soon as the result has been
-        /// returned and the waiting thread has been re-scheduled by the thread
-        /// manager the function will return.
-        ///
-        /// \param ec     [in,out] this represents the error status on exit,
-        ///               if this is pre-initialized to \a hpx#throws
-        ///               the function will throw on error instead. If the
-        ///               operation blocks and is aborted because the object
-        ///               went out of scope, the code \a hpx#yield_aborted is
-        ///               set or thrown.
-        ///
-        /// \note         If there has been an error reported (using the action
-        ///               \a base_lco#set_exception), this function will throw an
-        ///               exception encapsulating the reported error code and
-        ///               error description if <code>&ec == &throws</code>.
-        virtual data_type& get_result(error_code& ec = throws)
+        // retrieving the value
+        data_type& get_result_ready(error_code& ec = throws)
         {
-            // yields control if needed
-            wait(ec);
-            if (ec) return data_;
+            HPX_ASSERT(state_ != empty);
 
             if (data_.is_empty()) {
                 // the value has already been moved out of this future
@@ -202,6 +185,31 @@ namespace detail
                 }
             }
             return data_;
+        }
+
+        /// Get the result of the requested action. This call blocks (yields
+        /// control) if the result is not ready. As soon as the result has been
+        /// returned and the waiting thread has been re-scheduled by the thread
+        /// manager the function will return.
+        ///
+        /// \param ec     [in,out] this represents the error status on exit,
+        ///               if this is pre-initialized to \a hpx#throws
+        ///               the function will throw on error instead. If the
+        ///               operation blocks and is aborted because the object
+        ///               went out of scope, the code \a hpx#yield_aborted is
+        ///               set or thrown.
+        ///
+        /// \note         If there has been an error reported (using the action
+        ///               \a base_lco#set_exception), this function will throw an
+        ///               exception encapsulating the reported error code and
+        ///               error description if <code>&ec == &throws</code>.
+        virtual data_type& get_result(error_code& ec = throws)
+        {
+            // yields control if needed
+            wait(ec);
+            if (ec) return data_;
+
+            return get_result_ready(ec);
         }
 
         /// Set the result of the requested action.

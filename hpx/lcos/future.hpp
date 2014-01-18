@@ -116,25 +116,25 @@ namespace hpx { namespace lcos { namespace detail
     ///////////////////////////////////////////////////////////////////////////
     struct future_access
     {
-        template <typename Future, typename SharedState>
+        template <typename Future, typename State>
         static Future
-        create(boost::intrusive_ptr<SharedState> const& shared_state)
+        create(boost::intrusive_ptr<State> const& state, bool ready = false)
         {
-            return Future(shared_state);
+            return Future(state, ready);
         }
 
-        template <typename Future, typename SharedState>
+        template <typename Future, typename State>
         static Future
-        create(boost::intrusive_ptr<SharedState> && shared_state)
+        create(boost::intrusive_ptr<State> && state, bool ready = false)
         {
-            return Future(std::move(shared_state));
+            return Future(std::move(state), ready);
         }
 
-        template <typename Future, typename SharedState>
+        template <typename Future, typename State>
         static Future
-        create(SharedState* shared_state)
+        create(State* state, bool ready = false)
         {
-            return Future(boost::intrusive_ptr<SharedState>(shared_state));
+            return Future(boost::intrusive_ptr<State>(state), ready);
         }
 
         template <typename R>
@@ -396,31 +396,40 @@ namespace hpx { namespace lcos { namespace detail
     public:
         future_base() BOOST_NOEXCEPT
           : shared_state_()
+          , ready_(false)
         {}
 
         explicit future_base(
             boost::intrusive_ptr<shared_state_type> const& p
+          , bool ready = false
         ) : shared_state_(p)
+          , ready_(ready)
         {}
 
         explicit future_base(
             boost::intrusive_ptr<shared_state_type> && p
+          , bool ready = false
         ) : shared_state_(std::move(p))
+          , ready_(ready)
         {}
 
         future_base(future_base const& other)
           : shared_state_(other.shared_state_)
+          , ready_(other.ready_)
         {}
 
         future_base(future_base && other) BOOST_NOEXCEPT
           : shared_state_(std::move(other.shared_state_))
+          , ready_(other.ready_)
         {
             other.shared_state_ = 0;
+            other.ready_ = false;
         }
 
         void swap(future_base& other)
         {
             shared_state_.swap(other.shared_state_);
+            std::swap(ready_, other.ready_);
         }
 
         future_base& operator=(future_base const & other)
@@ -428,6 +437,7 @@ namespace hpx { namespace lcos { namespace detail
             if (this != &other)
             {
                 shared_state_ = other.shared_state_;
+                ready_ = other.ready_;
             }
             return *this;
         }
@@ -437,7 +447,9 @@ namespace hpx { namespace lcos { namespace detail
             if (this != &other)
             {
                 shared_state_ = std::move(other.shared_state_);
+                ready_ = other.ready_;
                 other.shared_state_ = 0;
+                other.ready_ = false;
             }
             return *this;
         }
@@ -451,7 +463,11 @@ namespace hpx { namespace lcos { namespace detail
         // Returns: true if the shared state is ready, false if it isn't.
         bool is_ready() const
         {
-            return shared_state_ != 0 && shared_state_->is_ready();
+            if (!ready_)
+            {
+                ready_ = (shared_state_ != 0 && shared_state_->is_ready());
+            }
+            return ready_;
         }
 
         // Returns: true if the shared state is ready and stores a value,
@@ -474,7 +490,15 @@ namespace hpx { namespace lcos { namespace detail
             if (!shared_state_)
                 return future_status::uninitialized;
 
-            return shared_state_->get_status();
+            if (!ready_)
+            {
+                BOOST_SCOPED_ENUM(future_status) status =
+                    shared_state_->get_status();
+
+                ready_ = (status == future_status::ready);
+                return status;
+            }
+            return future_status::ready;
         }
 
         // Notes: The three functions differ only by input parameters.
@@ -621,14 +645,19 @@ namespace hpx { namespace lcos { namespace detail
         // Effects: blocks until the shared state is ready.
         void wait(error_code& ec = throws) const
         {
-            if (!shared_state_)
+            if (!ready_)
             {
-                HPX_THROWS_IF(ec, no_state,
-                    "future_base<R>::wait",
-                    "this future has no valid shared state");
-                return;
+                if (!shared_state_)
+                {
+                    HPX_THROWS_IF(ec, no_state,
+                        "future_base<R>::wait",
+                        "this future has no valid shared state");
+                    return;
+                }
+
+                shared_state_->wait(ec);
+                ready_ = true;
             }
-            shared_state_->wait(ec);
         }
 
         // Effects: none if the shared state contains a deferred function
@@ -646,14 +675,23 @@ namespace hpx { namespace lcos { namespace detail
         wait_for(boost::posix_time::time_duration const& rel_time,
             error_code& ec = throws) const
         {
-            if (!shared_state_)
+            if (!ready_)
             {
-                HPX_THROWS_IF(ec, no_state,
-                    "future_base<R>::wait_for",
-                    "this future has no valid shared state");
-                return future_status::uninitialized;
+                if (!shared_state_)
+                {
+                    HPX_THROWS_IF(ec, no_state,
+                        "future_base<R>::wait_for",
+                        "this future has no valid shared state");
+                    return future_status::uninitialized;
+                }
+
+                BOOST_SCOPED_ENUM(future_status) status =
+                    shared_state_->wait_for(rel_time, ec);
+
+                ready_ = (status == future_status::ready);
+                return status;
             }
-            return shared_state_->wait_for(rel_time, ec);
+            return future_status::ready;
         }
         template <class Rep, class Period>
         BOOST_SCOPED_ENUM(future_status)
@@ -678,14 +716,23 @@ namespace hpx { namespace lcos { namespace detail
         wait_until(boost::posix_time::ptime const& abs_time,
             error_code& ec = throws) const
         {
-            if (!shared_state_)
+            if (!ready_)
             {
-                HPX_THROWS_IF(ec, no_state,
-                    "future_base<R>::wait_until",
-                    "this future has no valid shared state");
-                return future_status::uninitialized;
+                if (!shared_state_)
+                {
+                    HPX_THROWS_IF(ec, no_state,
+                        "future_base<R>::wait_until",
+                        "this future has no valid shared state");
+                    return future_status::uninitialized;
+                }
+
+                BOOST_SCOPED_ENUM(future_status) status =
+                    shared_state_->wait_until(abs_time, ec);
+
+                ready_ = (status == future_status::ready);
+                return status;
             }
-            return shared_state_->wait_until(abs_time, ec);
+            return future_status::ready;
         }
         template <class Clock, class Duration>
         BOOST_SCOPED_ENUM(future_status)
@@ -697,6 +744,7 @@ namespace hpx { namespace lcos { namespace detail
 
     protected:
         boost::intrusive_ptr<shared_state_type> shared_state_;
+        mutable bool ready_;
     };
 }}}
 
@@ -732,6 +780,7 @@ namespace hpx { namespace lcos
             ~invalidate()
             {
                 f_.shared_state_ = 0;
+                f_.ready_ = false;
             }
 
             unique_future& f_;
@@ -743,17 +792,21 @@ namespace hpx { namespace lcos
         // Effects: constructs a future object from an shared state
         explicit unique_future(
             boost::intrusive_ptr<shared_state_type> const& state
-        ) : base_type(state)
+          , bool ready = false
+        ) : base_type(state, ready)
         {}
 
         explicit unique_future(
             boost::intrusive_ptr<shared_state_type> && state
-        ) : base_type(std::move(state))
+          , bool ready = false
+        ) : base_type(std::move(state), ready)
         {}
 
         template <typename SharedState>
-        explicit unique_future(boost::intrusive_ptr<SharedState> const& state)
-          : base_type(boost::static_pointer_cast<shared_state_type>(state))
+        explicit unique_future(
+            boost::intrusive_ptr<SharedState> const& state
+          , bool ready = false
+        ) : base_type(boost::static_pointer_cast<shared_state_type>(state), ready)
         {}
 
     public:
@@ -840,9 +893,13 @@ namespace hpx { namespace lcos
             invalidate on_exit(*this);
 
             typedef typename shared_state_type::data_type data_type;
-            data_type& data = this->shared_state_->get_result();
+            data_type& data =
+                this->ready_
+                  ? this->shared_state_->get_result_ready()
+                  : this->shared_state_->get_result();
 
             // no error has been reported, return the result
+            this->ready_ = true;
             return detail::future_value<R>::get(data.move_value());
         }
         R get(error_code& ec)
@@ -858,10 +915,14 @@ namespace hpx { namespace lcos
             invalidate on_exit(*this);
 
             typedef typename shared_state_type::data_type data_type;
-            data_type& data = this->shared_state_->get_result(ec);
+            data_type& data =
+                this->ready_
+                  ? this->shared_state_->get_result_ready()
+                  : this->shared_state_->get_result();
             if (ec) return detail::future_value<R>::get_default();
 
             // no error has been reported, return the result
+            this->ready_ = true;
             return detail::future_value<R>::get(data.move_value());
         }
 
@@ -923,17 +984,21 @@ namespace hpx { namespace lcos
         // Effects: constructs a future object from an shared state
         explicit shared_future(
             boost::intrusive_ptr<shared_state_type> const& state
-        ) : base_type(state)
+          , bool ready = false
+        ) : base_type(state, ready)
         {}
 
         explicit shared_future(
             boost::intrusive_ptr<shared_state_type> && state
-        ) : base_type(std::move(state))
+          , bool ready = false
+        ) : base_type(std::move(state), ready)
         {}
 
         template <typename SharedState>
-        explicit shared_future(boost::intrusive_ptr<SharedState> const& state)
-          : base_type(boost::static_pointer_cast<shared_state_type>(state))
+        explicit shared_future(
+            boost::intrusive_ptr<SharedState> const& state
+          , bool ready = false
+        ) : base_type(boost::static_pointer_cast<shared_state_type>(state), ready)
         {}
 
     public:
@@ -1026,9 +1091,13 @@ namespace hpx { namespace lcos
             }
 
             typedef typename shared_state_type::data_type data_type;
-            data_type& data = this->shared_state_->get_result();
+            data_type& data =
+                this->ready_
+                  ? this->shared_state_->get_result_ready()
+                  : this->shared_state_->get_result();
 
             // no error has been reported, return the result
+            this->ready_ = true;
             return detail::future_value<R>::get(data.get_value());
         }
         typename detail::future_value<R>::const_lvref get(error_code& ec) const
@@ -1042,10 +1111,14 @@ namespace hpx { namespace lcos
             }
 
             typedef typename shared_state_type::data_type data_type;
-            data_type& data = this->shared_state_->get_result(ec);
+            data_type& data =
+                this->ready_
+                  ? this->shared_state_->get_result_ready()
+                  : this->shared_state_->get_result();
             if (ec) return detail::future_value<R>::get_default();
 
             // no error has been reported, return the result
+            this->ready_ = true;
             return detail::future_value<R>::get(data.get_value());
         }
 
@@ -1089,17 +1162,21 @@ namespace hpx { namespace lcos
 
         explicit future(
             boost::intrusive_ptr<future_data_type> const& future_data
+          , bool /*ready*/ = false
         ) : future_data_(future_data)
         {}
 
         explicit future(
             boost::intrusive_ptr<future_data_type> && future_data
+          , bool /*ready*/ = false
         ) : future_data_(std::move(future_data))
         {}
 
         template <typename U>
-        explicit future(boost::intrusive_ptr<U> const& future_data)
-          : future_data_(boost::static_pointer_cast<future_data_type>(future_data))
+        explicit future(
+            boost::intrusive_ptr<U> const& future_data
+          , bool /*ready*/ = false
+        ) : future_data_(boost::static_pointer_cast<future_data_type>(future_data))
         {}
 
     public:
@@ -1370,7 +1447,7 @@ namespace hpx { namespace lcos
 
         using lcos::detail::future_access;
         return future_access::create<unique_future<result_type> >(
-            std::move(p));
+            std::move(p), true);
     }
 
     // extension: create a pre-initialized future object which holds the
@@ -1449,8 +1526,10 @@ namespace hpx { namespace lcos
         friend struct detail::future_access;
 
         template <typename U>
-        explicit future(boost::intrusive_ptr<U> const& u)
-          : future_data_(boost::static_pointer_cast<future_data_type>(u))
+        explicit future(
+            boost::intrusive_ptr<U> const& u
+          , bool /*ready*/ = false
+        ) : future_data_(boost::static_pointer_cast<future_data_type>(u))
         {}
 
     public:
@@ -1648,7 +1727,8 @@ namespace hpx { namespace lcos
         p->set_result(util::unused);
 
         using lcos::detail::future_access;
-        return future_access::create<unique_future<void> >(std::move(p));
+        return future_access::create<unique_future<void> >(
+            std::move(p), true);
     }
 
     // extension: create a pre-initialized future object which gets ready at
